@@ -1,0 +1,2 @@
+# labcat
+Elaborating to categories

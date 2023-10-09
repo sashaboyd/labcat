@@ -1,0 +1,8 @@
+name: labcat
+depend: cubical-1lab
+include: .
+flags:
+  --cubical
+  --guardedness
+  --no-load-primitives
+  --rewriting

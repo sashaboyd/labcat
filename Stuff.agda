@@ -55,9 +55,37 @@ get-name mappings n =
       let new-mappings = insert-dict n n′ mappings
       pure (new-mappings , n′)
 
-mk-morph : List (Name × Name) → TC ⊤
-mk-morph mappings = do
+mk-def : List (Name × Name) → Name → TC (List (Name × Name))
+mk-def mappings n = do
+  new-mappings , n′ ← get-name mappings n
+  catchTC
+    (getDefinition n′ >> pure tt)
+    (do
+      function cs ← getDefinition n
+        where _ → typeError [ nameErr n , nameErr n′ ]
+      ty ← inferType (def n [])
+      declareDef (argN n′) ty
+      defineFun n′ cs
+    )
+  pure new-mappings
+
+mk-defs : List (Name × Name) → List Name → TC ⊤
+mk-defs mappings [] = pure tt
+mk-defs mappings (n ∷ ns) = do
+  new-mappings ← mk-def mappings n
+  mk-defs new-mappings ns
+
+catify : List (Name × Name) → TC ⊤
+catify mappings = do
+  let ns = map snd mappings
+  mk-defs mappings ns
   pure tt
 
+module Input where
+  hello : ⊤
+  hello = tt
+
 module Output where
-  unquoteDecl = mk-morph []
+  unquoteDecl = catify []
+  -- FIXME: this fails because of ‘unsolved metavariables’
+  -- unquoteDecl hello = catify [ quote Input.hello , hello ]

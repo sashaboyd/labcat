@@ -1,5 +1,5 @@
 open import Cat.Prelude
-open import 1Lab.Reflection
+open import 1Lab.Reflection renaming (typeError to typeError′)
 open import Data.List
 
 open import Data.Sum hiding ([_,_])
@@ -12,24 +12,65 @@ private
     ℓ ℓ′ : Level
     a b : Type ℓ
 
-sep : ErrorPart
-sep = strErr "\t∥\t"
-
-{-# TERMINATING #-}
-show-pattern : Arg Pattern → List ErrorPart
-show-pattern (arg _ (con c ps)) = sep ∷ strErr (primStringAppend "𝒸" (primShowQName c)) ∷ concat (map show-pattern ps)
-show-pattern (arg _ (dot t)) = [ sep , strErr "·", termErr t , sep ]
-show-pattern (arg _ (var x)) = [ sep , strErr "𝓋", strErr (primShowNat x), sep ]
-show-pattern (arg _ (lit l)) = [ sep , strErr "lit", sep ]
-show-pattern (arg _ (proj f)) = [ sep , strErr "π", strErr (primShowQName f), sep ]
-show-pattern (arg _ (Pattern.absurd x)) = [ sep , strErr "absurd", sep ]
-
 𝒞 = Sets lzero
 open Precategory 𝒞 renaming (Hom to _⇒_)
+open import Cat.Diagram.Limit.Finite using (Finitely-complete)
+open import Cat.Instances.Sets.Complete using (Sets-finitely-complete)
+𝒞-finitely-complete : Finitely-complete 𝒞
+𝒞-finitely-complete = Sets-finitely-complete
+open Finitely-complete 𝒞-finitely-complete
+open import Cat.Diagram.Terminal using (Terminal)
+open Terminal terminal renaming (top to 𝟙)
 
-Maybe-to-TC : List ErrorPart → Maybe a → TC a
-Maybe-to-TC errs nothing = typeError errs
-Maybe-to-TC _ (just x) = pure x
+ETC : Type ℓ → Type ℓ
+ETC a = List (Name × Name) → TC (a × List (Name × Name))
+
+get-mappings : ETC (List (Name × Name))
+get-mappings mappings = pure (mappings , mappings)
+
+map-fst : ∀{r : Type ℓ} → (a → b) → (a × r → b × r)
+map-fst f (x , y) = f x , y
+
+instance
+  Map-ETC : Map (eff ETC)
+  Map._<$>_ Map-ETC f etc mappings =
+    map-fst f <$> etc mappings
+
+  Idiom-ETC : Idiom (eff ETC)
+  Idiom.Map-idiom Idiom-ETC = Map-ETC
+  Idiom.pure Idiom-ETC x mappings = pure (x , mappings)
+  Idiom._<*>_ Idiom-ETC etc-f etc-x mappings = do
+    f , mappings′ ← etc-f mappings
+    x , mappings′′ ← etc-x mappings′
+    pure (f x , mappings′′)
+
+  Bind-ETC : Bind (eff ETC)
+  Bind._>>=_ Bind-ETC etc-x etc-f mappings = do
+    x , mappings′ ← etc-x mappings
+    etc-f x mappings′
+  Bind.Idiom-bind Bind-ETC = Idiom-ETC
+
+runETC : List (Name × Name) → ETC a → TC a
+runETC mappings etc = fst <$> etc mappings
+
+execETC : List (Name × Name) → ETC a → TC ⊤
+execETC mappings etc = runETC mappings etc >> pure tt
+
+liftTC : TC a → ETC a
+liftTC tc mappings = tc <&> λ x → (x , mappings)
+
+try_catch : ETC a → ETC a → ETC a
+try_catch f handler mappings = catchTC (f mappings) (handler mappings)
+
+typeError : List ErrorPart → ETC a
+typeError es = liftTC (typeError′ es)
+
+throw : ErrorPart → ETC a
+throw e = typeError [ e ]
+
+MaybeToETC : List ErrorPart → Maybe a → ETC a
+MaybeToETC errs nothing = typeError errs
+MaybeToETC _ (just x) = pure x
 
 lookup-dict : List (Name × Name) → Name → Maybe Name
 lookup-dict [] _ = nothing
@@ -40,52 +81,79 @@ lookup-dict ((k , v) ∷ xs) key with (primQNameEquality k key)
 insert-dict : Name → Name → List (Name × Name) → List (Name × Name)
 insert-dict k v dict = (k , v) ∷ dict
 
-get-name : List (Name × Name) → Name → TC (List (Name × Name) × Name)
-get-name mappings n =
-  catchTC get-existing-name create-name
+get-name : Name → ETC Name
+get-name n =
+  try get-existing-name
+  catch create-name
   where
     get-existing-name = do
-      n′ ← Maybe-to-TC [] (lookup-dict mappings n)
-      pure (mappings , n′)
+      mappings ← get-mappings
+      MaybeToETC [] (lookup-dict mappings n)
     create-name = do
       let new-name-str = primStringAppend "Cat." (primShowQName n)
 
-      n′ ← freshName new-name-str
+      n′ ← liftTC (freshName new-name-str)
 
-      let new-mappings = insert-dict n n′ mappings
-      pure (new-mappings , n′)
+      insert-dict n n′ <$> get-mappings
+      pure n′
 
-mk-def : List (Name × Name) → Name → TC (List (Name × Name))
-mk-def mappings n = do
-  new-mappings , n′ ← get-name mappings n
-  catchTC
+mk-def : Name → ETC ⊤
+mk-def n = do
+  n′ ← get-name n
+  liftTC $ catchTC
     (getDefinition n′ >> pure tt)
     (do
       function cs ← getDefinition n
-        where _ → typeError [ nameErr n , nameErr n′ ]
+        where _ → typeError′ [ nameErr n , nameErr n′ ]
       ty ← inferType (def n [])
       declareDef (argN n′) ty
       defineFun n′ cs
     )
-  pure new-mappings
 
-mk-defs : List (Name × Name) → List Name → TC ⊤
-mk-defs mappings [] = pure tt
-mk-defs mappings (n ∷ ns) = do
-  new-mappings ← mk-def mappings n
-  mk-defs new-mappings ns
+mk-defs : List Name → ETC ⊤
+mk-defs [] = pure tt
+mk-defs (n ∷ ns) = do
+  mk-def n
+  mk-defs ns
+
+to-def : Name → Term
+to-def n = def n []
+
+build-composite : Name → Term → ETC Term
+convert-expr : Term → ETC Term
+
+build-composite n t = do
+  n′ ← get-name n
+  let f = def n′ []
+  g ← convert-expr t
+  pure (def (quote _∘_) [ argN f , argN g ])
+
+convert-expr (var x _) = pure (def (quote id) [])
+convert-expr (con c []) = to-def <$> get-name c
+convert-expr (con c ((var x _) v∷ _)) = to-def <$> get-name c
+convert-expr (con c (t v∷ _)) = build-composite c t
+convert-expr (con c (_ ∷ as)) = convert-expr (con c as)
+convert-expr (def f []) = to-def <$> get-name f
+convert-expr (def f (t v∷ _)) = build-composite f t
+convert-expr (def f (_ ∷ as)) = convert-expr (def f as)
+convert-expr unknown = typeError [ strErr "unknown (convert-expr)" ]
+convert-expr _ = typeError [ strErr "stub: convert-expr" ]
 
 catify : List (Name × Name) → TC ⊤
 catify mappings = do
   let ns = map snd mappings
-  mk-defs mappings ns
-  pure tt
+  execETC mappings (mk-defs ns)
 
 module Input where
-  hello : ⊤
-  hello = tt
+  postulate
+    Thing : Type
+    thing : ⊤ → Thing
 
-module Output where
-  unquoteDecl = catify []
-  -- FIXME: this fails because of ‘unsolved metavariables’
-  -- unquoteDecl hello = catify [ quote Input.hello , hello ]
+  hello : ⊤ → Thing
+  hello x = thing x
+
+postulate
+  Thing : Ob
+  thing : 𝟙 ⇒ Thing
+
+hello : 𝟙 ⇒ Thing

@@ -68,6 +68,9 @@ typeError es = liftTC (typeError′ es)
 throw : ErrorPart → ETC a
 throw e = typeError [ e ]
 
+throwStr : String → ETC a
+throwStr s = throw (strErr s)
+
 MaybeToETC : List ErrorPart → Maybe a → ETC a
 MaybeToETC errs nothing = typeError errs
 MaybeToETC _ (just x) = pure x
@@ -116,6 +119,12 @@ mk-defs (n ∷ ns) = do
   mk-def n
   mk-defs ns
 
+id-term : Term
+id-term = def (quote id) []
+
+comp-term : Term → Term → Term
+comp-term f g = def (quote _∘_) [ argN f , argN g ]
+
 to-def : Name → Term
 to-def n = def n []
 
@@ -126,9 +135,9 @@ build-composite n t = do
   n′ ← get-name n
   let f = def n′ []
   g ← convert-expr t
-  pure (def (quote _∘_) [ argN f , argN g ])
+  pure (comp-term f g)
 
-convert-expr (var x _) = pure (def (quote id) [])
+convert-expr (var x _) = pure id-term
 convert-expr (con c []) = to-def <$> get-name c
 convert-expr (con c ((var x _) v∷ _)) = to-def <$> get-name c
 convert-expr (con c (t v∷ _)) = build-composite c t
@@ -136,8 +145,23 @@ convert-expr (con c (_ ∷ as)) = convert-expr (con c as)
 convert-expr (def f []) = to-def <$> get-name f
 convert-expr (def f (t v∷ _)) = build-composite f t
 convert-expr (def f (_ ∷ as)) = convert-expr (def f as)
-convert-expr unknown = typeError [ strErr "unknown (convert-expr)" ]
-convert-expr _ = typeError [ strErr "stub: convert-expr" ]
+convert-expr unknown = throwStr "stub: convert-expr unknown"
+convert-expr _ = throwStr "stub: convert-expr _"
+
+convert-pattern : Pattern → ETC Term
+convert-pattern (con c _) = pure (to-def c)
+convert-pattern (dot t) = throwStr "stub: convert-pattern (dot t)"
+convert-pattern (var x) = pure id-term
+convert-pattern (lit l) = throwStr "stub: convert-pattern (lit l)"
+convert-pattern (proj f) = pure (to-def f)
+convert-pattern (Pattern.absurd x) = throwStr "convert-pattern (Pattern.absurd x)"
+
+convert-patterns : List (Arg Pattern) → ETC Term
+convert-patterns [] = pure id-term
+convert-patterns (p v∷ ps) = do
+  f ← convert-pattern p
+  comp-term f <$> convert-patterns ps
+convert-patterns _ = throwStr "stub: convert-patterns _"
 
 catify : List (Name × Name) → TC ⊤
 catify mappings = do

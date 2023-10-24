@@ -19,8 +19,12 @@ open import Cat.Instances.Sets.Complete using (Sets-finitely-complete)
 𝒞-finitely-complete : Finitely-complete 𝒞
 𝒞-finitely-complete = Sets-finitely-complete
 open Finitely-complete 𝒞-finitely-complete
-open import Cat.Diagram.Terminal using (Terminal)
-open Terminal terminal renaming (top to 𝟙)
+open import Cat.Monoidal.Base using (Monoidal-category)
+
+postulate
+  𝒞-monoidal : Monoidal-category 𝒞
+
+open Monoidal-category 𝒞-monoidal renaming (Unit to 𝟙)
 
 ETC : Type ℓ → Type ℓ
 ETC a = List (Name × Name) → TC (a × List (Name × Name))
@@ -100,8 +104,8 @@ get-name n =
       insert-dict n n′ <$> get-mappings
       pure n′
 
-mk-def : Name → ETC ⊤
-mk-def n = do
+get-or-mk-def : Name → ETC Term
+get-or-mk-def n = do
   n′ ← get-name n
   liftTC $ catchTC
     (getDefinition n′ >> pure tt)
@@ -112,11 +116,12 @@ mk-def n = do
       declareDef (argN n′) ty
       defineFun n′ cs
     )
+  pure (def n′ [])
 
 mk-defs : List Name → ETC ⊤
 mk-defs [] = pure tt
 mk-defs (n ∷ ns) = do
-  mk-def n
+  get-or-mk-def n
   mk-defs ns
 
 id-term : Term
@@ -125,10 +130,12 @@ id-term = def (quote id) []
 comp-term : Term → Term → Term
 comp-term f g = def (quote _∘_) [ argN f , argN g ]
 
-to-def : Name → Term
-to-def n = def n []
+prod-term : Term → Term → Term
+prod-term f g = def (quote _⊗₁_) [ argN f , argN g ]
 
 build-composite : Name → Term → ETC Term
+build-prod : List (Arg Term) → ETC Term
+convert-ap-term : Name → List (Arg Term) → ETC Term
 convert-expr : Term → ETC Term
 
 build-composite n t = do
@@ -137,24 +144,30 @@ build-composite n t = do
   g ← convert-expr t
   pure (comp-term f g)
 
+build-prod [] = pure id-term
+build-prod (t v∷ []) = convert-expr t
+build-prod (t v∷ ts@(_ v∷ _)) =
+  prod-term <$> convert-expr t <*> build-prod ts
+build-prod (t v∷ (_ ∷ ts)) = build-prod (t v∷ ts)
+build-prod (_ ∷ ts) = build-prod ts
+
+convert-ap-term f [] = get-or-mk-def f
+convert-ap-term f as@(_ ∷ _) =
+  comp-term <$> get-or-mk-def f <*> build-prod as
+
 convert-expr (var x _) = pure id-term
-convert-expr (con c []) = to-def <$> get-name c
-convert-expr (con c ((var x _) v∷ _)) = to-def <$> get-name c
-convert-expr (con c (t v∷ _)) = build-composite c t
-convert-expr (con c (_ ∷ as)) = convert-expr (con c as)
-convert-expr (def f []) = to-def <$> get-name f
-convert-expr (def f (t v∷ _)) = build-composite f t
-convert-expr (def f (_ ∷ as)) = convert-expr (def f as)
+convert-expr (con c as) = convert-ap-term c as
+convert-expr (def f as) = convert-ap-term f as
 convert-expr unknown = throwStr "stub: convert-expr unknown"
 convert-expr _ = throwStr "stub: convert-expr _"
 
 convert-pattern : Pattern → ETC Term
-convert-pattern (con c _) = pure (to-def c)
+convert-pattern (con c _) = get-or-mk-def c
 convert-pattern (dot t) = throwStr "stub: convert-pattern (dot t)"
 convert-pattern (var x) = pure id-term
 convert-pattern (lit l) = throwStr "stub: convert-pattern (lit l)"
-convert-pattern (proj f) = pure (to-def f)
-convert-pattern (Pattern.absurd x) = throwStr "convert-pattern (Pattern.absurd x)"
+convert-pattern (proj f) = get-or-mk-def f
+convert-pattern (Pattern.absurd x) = throwStr "stub: convert-pattern (Pattern.absurd x)"
 
 convert-patterns : List (Arg Pattern) → ETC Term
 convert-patterns [] = pure id-term

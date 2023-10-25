@@ -14,17 +14,16 @@ private
 
 𝒞 = Sets lzero
 open Precategory 𝒞 renaming (Hom to _⇒_)
-open import Cat.Diagram.Limit.Finite using (Finitely-complete)
-open import Cat.Instances.Sets.Complete using (Sets-finitely-complete)
-𝒞-finitely-complete : Finitely-complete 𝒞
-𝒞-finitely-complete = Sets-finitely-complete
-open Finitely-complete 𝒞-finitely-complete
 open import Cat.Monoidal.Base using (Monoidal-category)
 
 postulate
   𝒞-monoidal : Monoidal-category 𝒞
 
 open Monoidal-category 𝒞-monoidal renaming (Unit to 𝟙)
+
+postulate
+  π₁ : ∀{x y : Ob} → (x ⊗ y) ⇒ x
+  π₂ : ∀{x y : Ob} → (x ⊗ y) ⇒ y
 
 ETC : Type ℓ → Type ℓ
 ETC a = List (Name × Name) → TC (a × List (Name × Name))
@@ -71,9 +70,6 @@ typeError es = liftTC (typeError′ es)
 
 throw : ErrorPart → ETC a
 throw e = typeError [ e ]
-
-throwStr : String → ETC a
-throwStr s = throw (strErr s)
 
 MaybeToETC : List ErrorPart → Maybe a → ETC a
 MaybeToETC errs nothing = typeError errs
@@ -135,6 +131,7 @@ prod-term f g = def (quote _⊗₁_) [ argN f , argN g ]
 
 build-composite : Name → Term → ETC Term
 build-prod : List (Arg Term) → ETC Term
+convert-var : Telescope → Nat → ETC Term
 convert-ap-term : Name → List (Arg Term) → ETC Term
 convert-expr : Term → ETC Term
 
@@ -151,30 +148,39 @@ build-prod (t v∷ ts@(_ v∷ _)) =
 build-prod (t v∷ (_ ∷ ts)) = build-prod (t v∷ ts)
 build-prod (_ ∷ ts) = build-prod ts
 
+convert-var [] n = throw "Variable not in scope"
+convert-var (_ ∷ []) zero = pure id-term
+convert-var (_ ∷ _) zero = pure (def (quote π₁) [])
+convert-var (_ ∷ (_ ∷ [])) (suc zero) = pure (def (quote π₂) [])
+convert-var (_ ∷ tel) (suc n) = do
+  comp-term <$> convert-var tel n <*> pure (def (quote π₂) [])
+
 convert-ap-term f [] = get-or-mk-def f
 convert-ap-term f as@(_ ∷ _) =
   comp-term <$> get-or-mk-def f <*> build-prod as
 
-convert-expr (var x _) = pure id-term
+convert-expr (var x _) = do
+  tel ← liftTC getContext
+  convert-var tel x
 convert-expr (con c as) = convert-ap-term c as
 convert-expr (def f as) = convert-ap-term f as
-convert-expr unknown = throwStr "stub: convert-expr unknown"
-convert-expr _ = throwStr "stub: convert-expr _"
+convert-expr unknown = throw "stub: convert-expr unknown"
+convert-expr _ = throw "stub: convert-expr _"
 
 convert-pattern : Pattern → ETC Term
 convert-pattern (con c _) = get-or-mk-def c
-convert-pattern (dot t) = throwStr "stub: convert-pattern (dot t)"
+convert-pattern (dot t) = throw "stub: convert-pattern (dot t)"
 convert-pattern (var x) = pure id-term
-convert-pattern (lit l) = throwStr "stub: convert-pattern (lit l)"
+convert-pattern (lit l) = throw "stub: convert-pattern (lit l)"
 convert-pattern (proj f) = get-or-mk-def f
-convert-pattern (Pattern.absurd x) = throwStr "stub: convert-pattern (Pattern.absurd x)"
+convert-pattern (Pattern.absurd x) = throw "stub: convert-pattern (Pattern.absurd x)"
 
 convert-patterns : List (Arg Pattern) → ETC Term
 convert-patterns [] = pure id-term
 convert-patterns (p v∷ ps) = do
   f ← convert-pattern p
   comp-term f <$> convert-patterns ps
-convert-patterns _ = throwStr "stub: convert-patterns _"
+convert-patterns _ = throw "stub: convert-patterns _"
 
 catify : List (Name × Name) → TC ⊤
 catify mappings = do

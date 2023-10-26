@@ -7,13 +7,12 @@ open import Cat.Monoidal.Base
 
 module Stuff where
 
+open import Cat.Instances.Free
+
 private
   variable
     ℓ ℓ′ : Level
     a b : Type ℓ
-
-
-open import Cat.Instances.Free
 
 graph : Graph lzero lzero
 Graph.vert graph = el! Bool
@@ -89,6 +88,11 @@ typeError es = liftTC (typeError′ es)
 
 throw : ErrorPart → ETC a
 throw e = typeError [ e ]
+
+_DEBUG_ : ErrorPart → ETC a → ETC a
+e DEBUG etc = liftTC (debugPrint "" 0 [ strErr "⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ " , e ]) >> etc
+
+infixl 0 _DEBUG_
 
 STUB : ErrorPart → ETC a
 STUB e = typeError [ "stub: " , e ]
@@ -169,7 +173,7 @@ get-or-mk-def n = do
     ) catch (
       do
         function cs ← liftTC (getDefinition n)
-          where _ → typeError [ nameErr n , nameErr n′ ]
+          where _ → typeError [ "Not a function", nameErr n , nameErr n′ ]
         cs′ ← convert-clauses cs
         solve n′ cs′
     )
@@ -234,7 +238,7 @@ convert-patterns _ = STUB "convert-patterns _"
 
 catify : List (Name × Name) → TC ⊤
 catify mappings = do
-  let ns = map snd mappings
+  let ns = map fst mappings
   execETC mappings (mk-defs ns)
 
 module Input where
@@ -260,7 +264,8 @@ stop = cons tt nil
 step-stop : Going ⇒ Gone
 unquoteDef step-stop =
   catify
-  [ (quote Input.step , quote step)
-  , (quote Input.stop , quote stop)
-  , (quote Input.step-stop , step-stop)
-  ]
+  ((quote Input.step-stop , step-stop)
+  ∷ (quote Input.step , quote step)
+  ∷ (quote Input.stop , quote stop)
+  ∷ []
+  )

@@ -79,8 +79,10 @@ execETC mappings etc = runETC mappings etc >> pure tt
 liftTC : TC a → ETC a
 liftTC tc mappings = tc <&> λ x → (x , mappings)
 
-try_catch : ETC a → ETC a → ETC a
-try_catch f handler mappings = catchTC (f mappings) (handler mappings)
+try_catch_ : ETC a → ETC a → ETC a
+try_catch_ f handler mappings = catchTC (f mappings) (handler mappings)
+
+infixr 0 try_catch_
 
 typeError : List ErrorPart → ETC a
 typeError es = liftTC (typeError′ es)
@@ -154,17 +156,22 @@ solve n ((def f args , rhs) ∷ []) =
          defineFun f [ clause tel [] rhs ])
   else
     STUB "solve: equation too complex"
-solve n ((lhs , rhs) ∷ []) = STUB "equation too complex"
-solve _ (_ ∷ _ ∷ _) = STUB "solve for more than one equation"
+solve n ((lhs , rhs) ∷ []) = STUB "solve: equation too complex"
+solve _ (_ ∷ _ ∷ _) = STUB "solve: more than one equation"
 
+{-# TERMINATING #-}
 get-or-mk-def n = do
   n′ ← get-name n
-  liftTC $ catchTC
-    (getDefinition n′ >> pure tt)
-    (do
-      function cs ← getDefinition n
-        where _ → typeError′ [ nameErr n , nameErr n′ ]
-      defineFun n′ cs
+  try (
+    do
+      liftTC (getDefinition n′)
+      pure tt
+    ) catch (
+      do
+        function cs ← liftTC (getDefinition n)
+          where _ → typeError [ nameErr n , nameErr n′ ]
+        cs′ ← convert-clauses cs
+        solve n′ cs′
     )
   pure (def n′ [])
 

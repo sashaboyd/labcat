@@ -12,7 +12,24 @@ private
     ℓ ℓ′ : Level
     a b : Type ℓ
 
-𝒞 = Sets lzero
+
+open import Cat.Instances.Free
+
+graph : Graph lzero lzero
+Graph.vert graph = el! Bool
+Graph.edge graph false false = el! ⊤
+Graph.edge graph false true = el! ⊤
+Graph.edge graph true false = el! ⊥
+Graph.edge graph true true = el! ⊥
+
+open Graph graph
+
+path-cat : Precategory lzero lzero
+path-cat = Path-category graph
+
+-- 𝒞 = Sets lzero
+𝒞 = path-cat
+
 open Precategory 𝒞 renaming (Hom to _⇒_)
 open import Cat.Monoidal.Base using (Monoidal-category)
 
@@ -189,14 +206,28 @@ catify mappings = do
 
 module Input where
   postulate
-    Thing : Type
-    thing : ⊤ → Thing
+    Going : Type
+    Gone : Type
+    step : Going → Going
+    stop : Going → Gone
 
-  hello : ⊤ → Thing
-  hello x = thing x
+  step-stop : Going → Gone
+  step-stop x = stop (step x)
 
-postulate
-  Thing : Ob
-  thing : 𝟙 ⇒ Thing
+Going Gone : Ob
+Going = false
+Gone = true
 
-hello : 𝟙 ⇒ Thing
+step : Going ⇒ Going
+step = cons tt nil
+
+stop : Going ⇒ Gone
+stop = cons tt nil
+
+step-stop : Going ⇒ Gone
+unquoteDef step-stop =
+  catify
+  [ (quote Input.step , quote step)
+  , (quote Input.stop , quote stop)
+  , (quote Input.step-stop , step-stop)
+  ]

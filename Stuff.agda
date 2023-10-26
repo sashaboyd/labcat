@@ -132,6 +132,7 @@ comp-term f g = def (quote _∘_) [ argN f , argN g ]
 prod-term : Term → Term → Term
 prod-term f g = def (quote _⊗₁_) [ argN f , argN g ]
 
+solve : Name → List (Term × Term) → ETC ⊤
 get-or-mk-def : Name → ETC Term
 mk-defs : List Name → ETC ⊤
 build-composite : Name → Term → ETC Term
@@ -142,6 +143,19 @@ convert-ap-term : Name → List (Arg Term) → ETC Term
 convert-expr : Term → ETC Term
 convert-pattern : Pattern → ETC Term
 convert-patterns : List (Arg Pattern) → ETC Term
+
+-- Create a definition for the given `Name` based on a list of equations
+solve _ [] = STUB "solve _ []"
+solve n ((def f args , rhs) ∷ []) =
+  if n name=? f
+  then
+    liftTC (
+      do tel ← getContext
+         defineFun f [ clause tel [] rhs ])
+  else
+    STUB "solve: equation too complex"
+solve n ((lhs , rhs) ∷ []) = STUB "equation too complex"
+solve _ (_ ∷ _ ∷ _) = STUB "solve for more than one equation"
 
 get-or-mk-def n = do
   n′ ← get-name n

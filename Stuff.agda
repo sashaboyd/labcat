@@ -1,5 +1,5 @@
 open import Cat.Prelude
-open import 1Lab.Reflection renaming (typeError to typeError′)
+open import 1Lab.Reflection renaming (typeError to typeError′ ; inContext to inContext′)
 open import Data.List
 
 open import Data.Sum hiding ([_,_])
@@ -88,6 +88,12 @@ typeError es = liftTC (typeError′ es)
 throw : ErrorPart → ETC a
 throw e = typeError [ e ]
 
+STUB : ErrorPart → ETC a
+STUB e = typeError [ "stub: " , e ]
+
+inContext : Telescope → ETC a → ETC a
+inContext tel etc mappings = inContext′ tel (etc mappings)
+
 MaybeToETC : List ErrorPart → Maybe a → ETC a
 MaybeToETC errs nothing = typeError errs
 MaybeToETC _ (just x) = pure x
@@ -117,26 +123,6 @@ get-name n =
       insert-dict n n′ <$> get-mappings
       pure n′
 
-get-or-mk-def : Name → ETC Term
-get-or-mk-def n = do
-  n′ ← get-name n
-  liftTC $ catchTC
-    (getDefinition n′ >> pure tt)
-    (do
-      function cs ← getDefinition n
-        where _ → typeError′ [ nameErr n , nameErr n′ ]
-      ty ← inferType (def n [])
-      declareDef (argN n′) ty
-      defineFun n′ cs
-    )
-  pure (def n′ [])
-
-mk-defs : List Name → ETC ⊤
-mk-defs [] = pure tt
-mk-defs (n ∷ ns) = do
-  get-or-mk-def n
-  mk-defs ns
-
 id-term : Term
 id-term = def (quote id) []
 
@@ -146,11 +132,32 @@ comp-term f g = def (quote _∘_) [ argN f , argN g ]
 prod-term : Term → Term → Term
 prod-term f g = def (quote _⊗₁_) [ argN f , argN g ]
 
+get-or-mk-def : Name → ETC Term
+mk-defs : List Name → ETC ⊤
 build-composite : Name → Term → ETC Term
 build-prod : List (Arg Term) → ETC Term
+convert-clauses : List Clause → ETC (List (Term × Term))
 convert-var : Telescope → Nat → ETC Term
 convert-ap-term : Name → List (Arg Term) → ETC Term
 convert-expr : Term → ETC Term
+convert-pattern : Pattern → ETC Term
+convert-patterns : List (Arg Pattern) → ETC Term
+
+get-or-mk-def n = do
+  n′ ← get-name n
+  liftTC $ catchTC
+    (getDefinition n′ >> pure tt)
+    (do
+      function cs ← getDefinition n
+        where _ → typeError′ [ nameErr n , nameErr n′ ]
+      defineFun n′ cs
+    )
+  pure (def n′ [])
+
+mk-defs [] = pure tt
+mk-defs (n ∷ ns) = do
+  get-or-mk-def n
+  mk-defs ns
 
 build-composite n t = do
   n′ ← get-name n
@@ -164,6 +171,13 @@ build-prod (t v∷ ts@(_ v∷ _)) =
   prod-term <$> convert-expr t <*> build-prod ts
 build-prod (t v∷ (_ ∷ ts)) = build-prod (t v∷ ts)
 build-prod (_ ∷ ts) = build-prod ts
+
+convert-clauses [] = pure []
+convert-clauses (clause tel ps t ∷ cs) = do
+  eqn ← inContext tel (_,_ <$> convert-patterns ps <*> convert-expr t)
+  (eqn ∷_) <$> convert-clauses cs
+convert-clauses (absurd-clause _ _ ∷ _) =
+  STUB "convert-clauses absurd-clause"
 
 convert-var [] n = throw "Variable not in scope"
 convert-var (_ ∷ []) zero = pure id-term
@@ -181,23 +195,21 @@ convert-expr (var x _) = do
   convert-var tel x
 convert-expr (con c as) = convert-ap-term c as
 convert-expr (def f as) = convert-ap-term f as
-convert-expr unknown = throw "stub: convert-expr unknown"
-convert-expr _ = throw "stub: convert-expr _"
+convert-expr unknown = STUB "convert-expr unknown"
+convert-expr _ = STUB "convert-expr _"
 
-convert-pattern : Pattern → ETC Term
 convert-pattern (con c _) = get-or-mk-def c
-convert-pattern (dot t) = throw "stub: convert-pattern (dot t)"
+convert-pattern (dot t) = STUB "convert-pattern (dot t)"
 convert-pattern (var x) = pure id-term
-convert-pattern (lit l) = throw "stub: convert-pattern (lit l)"
+convert-pattern (lit l) = STUB "convert-pattern (lit l)"
 convert-pattern (proj f) = get-or-mk-def f
-convert-pattern (Pattern.absurd x) = throw "stub: convert-pattern (Pattern.absurd x)"
+convert-pattern (Pattern.absurd x) = STUB "convert-pattern (Pattern.absurd x)"
 
-convert-patterns : List (Arg Pattern) → ETC Term
 convert-patterns [] = pure id-term
 convert-patterns (p v∷ ps) = do
   f ← convert-pattern p
   comp-term f <$> convert-patterns ps
-convert-patterns _ = throw "stub: convert-patterns _"
+convert-patterns _ = STUB "convert-patterns _"
 
 catify : List (Name × Name) → TC ⊤
 catify mappings = do

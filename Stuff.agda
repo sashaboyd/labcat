@@ -41,10 +41,19 @@ postulate
   π₁ : ∀{x y : Ob} → (x ⊗ y) ⇒ x
   π₂ : ∀{x y : Ob} → (x ⊗ y) ⇒ y
 
-ETC : Type ℓ → Type ℓ
-ETC a = List (Name × Name) → TC (a × List (Name × Name))
+data Converted {ℓ} (a : Type ℓ) : Type ℓ where
+  conv : a → Converted a
 
-get-mappings : ETC (List (Name × Name))
+fromConv : Converted a → a
+fromConv (conv x) = x
+
+Mappings : Type
+Mappings = List (Name × Converted Name)
+
+ETC : Type ℓ → Type ℓ
+ETC a = Mappings → TC (a × Mappings)
+
+get-mappings : ETC Mappings
 get-mappings mappings = pure (mappings , mappings)
 
 map-fst : ∀{r : Type ℓ} → (a → b) → (a × r → b × r)
@@ -69,10 +78,10 @@ instance
     etc-f x mappings′
   Bind.Idiom-bind Bind-ETC = Idiom-ETC
 
-runETC : List (Name × Name) → ETC a → TC a
+runETC : Mappings → ETC a → TC a
 runETC mappings etc = fst <$> etc mappings
 
-execETC : List (Name × Name) → ETC a → TC ⊤
+execETC : Mappings → ETC a → TC ⊤
 execETC mappings etc = runETC mappings etc >> pure tt
 
 liftTC : TC a → ETC a
@@ -104,55 +113,57 @@ MaybeToETC : List ErrorPart → Maybe a → ETC a
 MaybeToETC errs nothing = typeError errs
 MaybeToETC _ (just x) = pure x
 
-lookup-dict : List (Name × Name) → Name → Maybe Name
-lookup-dict [] _ = nothing
-lookup-dict ((k , v) ∷ xs) key with (primQNameEquality k key)
+lookup-mapping : Mappings → Name → Maybe (Converted Name)
+lookup-mapping [] _ = nothing
+lookup-mapping ((k , v) ∷ xs) key with (primQNameEquality k key)
 ...                                | true = just v
-...                                | false = lookup-dict xs key
+...                                | false = lookup-mapping xs key
 
-insert-dict : Name → Name → List (Name × Name) → List (Name × Name)
-insert-dict k v dict = (k , v) ∷ dict
+insert-mapping : Name → Converted Name → Mappings → Mappings
+insert-mapping k v dict = (k , v) ∷ dict
 
-get-name : Name → ETC Name
+get-name : Name → ETC (Converted Name)
 get-name n =
   try get-existing-name
   catch create-name
   where
     get-existing-name = do
       mappings ← get-mappings
-      MaybeToETC [] (lookup-dict mappings n)
+      MaybeToETC [] (lookup-mapping mappings n)
     create-name = do
       let new-name-str = primStringAppend "Cat." (primShowQName n)
 
-      n′ ← liftTC (freshName new-name-str)
+      n′ ← conv <$> liftTC (freshName new-name-str)
 
-      insert-dict n n′ <$> get-mappings
+      insert-mapping n n′ <$> get-mappings
       pure n′
 
-id-term : Term
-id-term = def (quote id) []
+id-term : Converted Term
+id-term = conv (def (quote id) [])
 
-comp-term : Term → Term → Term
-comp-term f g = def (quote _∘_) [ argN f , argN g ]
+comp-term : Converted Term → Converted Term → Converted Term
+comp-term (conv f) (conv g) =
+  conv (def (quote _∘_) [ argN f , argN g ])
 
-prod-term : Term → Term → Term
-prod-term f g = def (quote _⊗₁_) [ argN f , argN g ]
+prod-term : Converted Term → Converted Term → Converted Term
+prod-term (conv f) (conv g) =
+  conv (def (quote _⊗₁_) [ argN f , argN g ])
 
-solve : Name → List (Term × Term) → ETC ⊤
-get-or-mk-def : Name → ETC Term
+solve : Converted Name → List (Converted Term × Converted Term) → ETC ⊤
+get-or-mk-def : Name → ETC (Converted Term)
 mk-defs : List Name → ETC ⊤
-build-composite : Name → Term → ETC Term
-build-prod : List (Arg Term) → ETC Term
-convert-clauses : List Clause → ETC (List (Term × Term))
-convert-var : Telescope → Nat → ETC Term
-convert-ap-term : Name → List (Arg Term) → ETC Term
-convert-expr : Term → ETC Term
-convert-pattern : Pattern → ETC Term
-convert-patterns : List (Arg Pattern) → ETC Term
+build-composite : Name → Term → ETC (Converted Term)
+build-prod : List (Arg Term) → ETC (Converted Term)
+convert-clauses : List Clause → ETC (List (Converted Term × Converted Term))
+convert-var : Telescope → Nat → ETC (Converted Term)
+convert-ap-term : Name → List (Arg Term) → ETC (Converted Term)
+convert-expr : Term → ETC (Converted Term)
+convert-pattern : Pattern → ETC (Converted Term)
+convert-patterns : List (Arg Pattern) → ETC (Converted Term)
 
 -- Create a definition for the given `Name` based on a list of equations
 solve _ [] = STUB "solve _ []"
-solve n ((def f args , rhs) ∷ []) =
+solve (conv n) ((conv (def f args) , conv rhs) ∷ []) =
   if n name=? f
   then
     liftTC (
@@ -168,16 +179,17 @@ get-or-mk-def n = do
   n′ ← get-name n
   try (
     do
-      liftTC (getDefinition n′)
+      liftTC (getDefinition (fromConv n′))
       pure tt
     ) catch (
       do
         function cs ← liftTC (getDefinition n)
-          where _ → typeError [ "Not a function", nameErr n , nameErr n′ ]
+          where _ → typeError
+                      [ "Not a function" , nameErr n , nameErr (fromConv n′) ]
         cs′ ← convert-clauses cs
         solve n′ cs′
     )
-  pure (def n′ [])
+  pure (conv (def (fromConv n′) []))
 
 mk-defs [] = pure tt
 mk-defs (n ∷ ns) = do
@@ -185,8 +197,8 @@ mk-defs (n ∷ ns) = do
   mk-defs ns
 
 build-composite n t = do
-  n′ ← get-name n
-  let f = def n′ []
+  conv n′ ← get-name n
+  let f = conv (def n′ [])
   g ← convert-expr t
   pure (comp-term f g)
 
@@ -206,10 +218,10 @@ convert-clauses (absurd-clause _ _ ∷ _) =
 
 convert-var [] n = throw "Variable not in scope"
 convert-var (_ ∷ []) zero = pure id-term
-convert-var (_ ∷ _) zero = pure (def (quote π₁) [])
-convert-var (_ ∷ (_ ∷ [])) (suc zero) = pure (def (quote π₂) [])
+convert-var (_ ∷ _) zero = pure (conv (def (quote π₁) []))
+convert-var (_ ∷ (_ ∷ [])) (suc zero) = pure (conv (def (quote π₂) []))
 convert-var (_ ∷ tel) (suc n) = do
-  comp-term <$> convert-var tel n <*> pure (def (quote π₂) [])
+  comp-term <$> convert-var tel n <*> pure (conv (def (quote π₂) []))
 
 convert-ap-term f [] = get-or-mk-def f
 convert-ap-term f as@(_ ∷ _) =
@@ -236,7 +248,7 @@ convert-patterns (p v∷ ps) = do
   comp-term f <$> convert-patterns ps
 convert-patterns _ = STUB "convert-patterns _"
 
-catify : List (Name × Name) → TC ⊤
+catify : Mappings → TC ⊤
 catify mappings = do
   let ns = map fst mappings
   execETC mappings (mk-defs ns)
@@ -264,8 +276,8 @@ stop = cons tt nil
 step-stop : Going ⇒ Gone
 unquoteDef step-stop =
   catify
-  ((quote Input.step-stop , step-stop)
-  ∷ (quote Input.step , quote step)
-  ∷ (quote Input.stop , quote stop)
+  ((quote Input.step-stop , conv step-stop)
+  ∷ (quote Input.step , conv (quote step))
+  ∷ (quote Input.stop , conv (quote stop))
   ∷ []
   )

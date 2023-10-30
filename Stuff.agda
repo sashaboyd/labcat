@@ -14,6 +14,11 @@ private
     ℓ ℓ′ : Level
     a b : Type ℓ
 
+_⋄_ : String → String → String
+_⋄_ = primStringAppend
+
+infixr 10 _⋄_
+
 graph : Graph lzero lzero
 Graph.vert graph = el! Bool
 Graph.edge graph false false = el! ⊤
@@ -101,7 +106,7 @@ throw e = typeError [ e ]
 _DEBUG_ : ErrorPart → ETC a → ETC a
 e DEBUG etc = liftTC (debugPrint "" 0 [ strErr "⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ " , e ]) >> etc
 
-infixl 0 _DEBUG_
+infixr 0 _DEBUG_
 
 STUB : ErrorPart → ETC a
 STUB e = typeError [ "stub: " , e ]
@@ -177,19 +182,19 @@ solve _ (_ ∷ _ ∷ _) = STUB "solve: more than one equation"
 {-# TERMINATING #-}
 get-or-mk-def n = do
   n′ ← get-name n
-  try (
-    do
-      liftTC (getDefinition (fromConv n′))
-      pure tt
-    ) catch (
-      do
-        function cs ← liftTC (getDefinition n)
-          where _ → typeError
-                      [ "Not a function" , nameErr n , nameErr (fromConv n′) ]
-        cs′ ← convert-clauses cs
-        solve n′ cs′
-    )
+  dfn ← liftTC (getDefinition (fromConv n′))
+  mk-dfn n′ dfn
   pure (conv (def (fromConv n′) []))
+
+  where
+    mk-dfn : Converted Name → Definition → ETC ⊤
+    mk-dfn n′ (function []) = do
+      function cs ← liftTC (getDefinition n)
+        where _ → typeError
+                    [ "Not a function" , nameErr n , nameErr (fromConv n′) ]
+      cs′ ← convert-clauses cs
+      solve n′ cs′
+    mk-dfn _ _ = pure tt
 
 mk-defs [] = pure tt
 mk-defs (n ∷ ns) = do
@@ -243,6 +248,8 @@ convert-pattern (proj f) = get-or-mk-def f
 convert-pattern (Pattern.absurd x) = STUB "convert-pattern (Pattern.absurd x)"
 
 convert-patterns [] = pure id-term
+convert-patterns (p v∷ []) = convert-pattern p
+convert-patterns (p v∷ (var _ v∷ ps)) = convert-patterns (p v∷ ps)
 convert-patterns (p v∷ ps) = do
   f ← convert-pattern p
   comp-term f <$> convert-patterns ps

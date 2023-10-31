@@ -159,7 +159,7 @@ get-or-mk-def : Name → ETC (Converted Term)
 mk-defs : List Name → ETC ⊤
 build-composite : Name → Term → ETC (Converted Term)
 build-prod : List (Arg Term) → ETC (Converted Term)
-convert-clauses : List Clause → ETC (List (Converted Term × Converted Term))
+convert-clauses : Name → List Clause → ETC (List (Converted Term × Converted Term))
 convert-var : Telescope → Nat → ETC (Converted Term)
 convert-ap-term : Name → List (Arg Term) → ETC (Converted Term)
 convert-expr : Term → ETC (Converted Term)
@@ -192,7 +192,7 @@ get-or-mk-def n = do
       function cs ← liftTC (getDefinition n)
         where _ → typeError
                     [ "Not a function" , nameErr n , nameErr (fromConv n′) ]
-      cs′ ← convert-clauses cs
+      cs′ ← convert-clauses n cs
       solve n′ cs′
     mk-dfn _ _ = pure tt
 
@@ -214,12 +214,19 @@ build-prod (t v∷ ts@(_ v∷ _)) =
 build-prod (t v∷ (_ ∷ ts)) = build-prod (t v∷ ts)
 build-prod (_ ∷ ts) = build-prod ts
 
-convert-clauses [] = pure []
-convert-clauses (clause tel ps t ∷ cs) = do
-  eqn ← inContext tel (_,_ <$> convert-patterns ps <*> convert-expr t)
-  (eqn ∷_) <$> convert-clauses cs
-convert-clauses (absurd-clause _ _ ∷ _) =
-  STUB "convert-clauses absurd-clause"
+-- Insert the symbol being defined into its list of Patterns. Idempotent.
+insert-name : Name → List (Arg Pattern) → List (Arg Pattern)
+insert-name n ps@(arg i (dot (def n′ [])) ∷ _) = ps
+insert-name n (arg i (proj f) ∷ ps) = arg i (proj f) ∷ insert-name n ps
+insert-name n ps = argN (dot (def n [])) ∷ ps
+
+convert-clauses _ [] = pure []
+convert-clauses f (clause tel ps t ∷ cs) = do
+  let ps′ = insert-name f ps
+  eqn ← inContext tel (_,_ <$> convert-patterns ps′ <*> convert-expr t)
+  (eqn ∷_) <$> convert-clauses f cs
+convert-clauses _ (absurd-clause _ _ ∷ _) =
+  STUB "convert-clauses _ absurd-clause"
 
 convert-var [] n = throw "Variable not in scope"
 convert-var (_ ∷ []) zero = pure id-term
@@ -241,7 +248,7 @@ convert-expr unknown = STUB "convert-expr unknown"
 convert-expr _ = STUB "convert-expr _"
 
 convert-pattern (con c _) = get-or-mk-def c
-convert-pattern (dot t) = STUB "convert-pattern (dot t)"
+convert-pattern (dot t) = convert-expr t
 convert-pattern (var x) = pure id-term
 convert-pattern (lit l) = STUB "convert-pattern (lit l)"
 convert-pattern (proj f) = get-or-mk-def f

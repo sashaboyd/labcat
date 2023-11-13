@@ -46,14 +46,28 @@ postulate
   π₁ : ∀{x y : Ob} → (x ⊗ y) ⇒ x
   π₂ : ∀{x y : Ob} → (x ⊗ y) ⇒ y
 
-data Converted {ℓ} (a : Type ℓ) : Type ℓ where
+data Status : Type where
+  unconverted converting converted : Status
+
+data Converted (a : Type ℓ) : Type ℓ where
   conv : a → Converted a
 
 fromConv : Converted a → a
 fromConv (conv x) = x
 
+record Entry : Type where
+  constructor entry
+  field
+    cname : Converted Name
+    status : Status
+
+open Entry
+
+mk-entry : Name → Status → Entry
+mk-entry n s = entry (conv n) s
+
 Mappings : Type
-Mappings = List (Name × Converted Name)
+Mappings = List (Name × Entry)
 
 ETC : Type ℓ → Type ℓ
 ETC a = Mappings → TC (a × Mappings)
@@ -61,8 +75,14 @@ ETC a = Mappings → TC (a × Mappings)
 get-mappings : ETC Mappings
 get-mappings mappings = pure (mappings , mappings)
 
+update-mappings : (Mappings → Mappings) → ETC ⊤
+update-mappings f mappings = pure (tt , f mappings)
+
 map-fst : ∀{r : Type ℓ} → (a → b) → (a × r → b × r)
 map-fst f (x , y) = f x , y
+
+map-snd : ∀{r : Type ℓ} → (a → b) → (r × a → r × b)
+map-snd f (x , y) = x , f y
 
 instance
   Map-ETC : Map (eff ETC)
@@ -103,10 +123,16 @@ typeError es = liftTC (typeError′ es)
 throw : ErrorPart → ETC a
 throw e = typeError [ e ]
 
-_DEBUG_ : ErrorPart → ETC a → ETC a
-e DEBUG etc = liftTC (debugPrint "" 0 [ strErr "⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ " , e ]) >> etc
+DEBUGS : List ErrorPart → ETC ⊤
+DEBUGS es = liftTC (debugPrint "" 0 ([ strErr "⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ ⋆ " ] 1Lab.Reflection.++ es))
 
-infixr 0 _DEBUG_
+DEBUG : ErrorPart → ErrorPart → ETC ⊤
+DEBUG s e = DEBUGS [ s , ": " , e ]
+
+_<DEBUG>_ : ErrorPart → ETC a → ETC a
+e <DEBUG> etc = DEBUG "" e >> etc
+
+infixr 0 _<DEBUG>_
 
 STUB : ErrorPart → ETC a
 STUB e = typeError [ "stub: " , e ]
@@ -114,34 +140,62 @@ STUB e = typeError [ "stub: " , e ]
 inContext : Telescope → ETC a → ETC a
 inContext tel etc mappings = inContext′ tel (etc mappings)
 
-MaybeToETC : List ErrorPart → Maybe a → ETC a
-MaybeToETC errs nothing = typeError errs
-MaybeToETC _ (just x) = pure x
-
-lookup-mapping : Mappings → Name → Maybe (Converted Name)
-lookup-mapping [] _ = nothing
-lookup-mapping ((k , v) ∷ xs) key with (primQNameEquality k key)
+lookup-mapping : Name → Mappings → Maybe Entry
+lookup-mapping _ [] = nothing
+lookup-mapping key ((k , v) ∷ ms) with (primQNameEquality k key)
 ...                                | true = just v
-...                                | false = lookup-mapping xs key
+...                                | false = lookup-mapping key ms
 
-insert-mapping : Name → Converted Name → Mappings → Mappings
-insert-mapping k v dict = (k , v) ∷ dict
+open import Data.Maybe.Base using (Map-Maybe)
+
+insert-mapping : Name → Converted Name → Status → Mappings → Mappings
+insert-mapping key v s dict = (key , entry v s) ∷ dict
+
+update-mapping : Name → (Entry → Entry) → Mappings → Mappings
+update-mapping key _ [] = []
+update-mapping key f ((k , v) ∷ ms) with (primQNameEquality k key)
+...                                  | true = (k , f v) ∷ ms
+...                                  | false = (k , v) ∷ update-mapping key f ms
+
+update-status : Name → (Status → Status) → Mappings → Mappings
+update-status key f = update-mapping key (λ e → entry (cname e) (f (status e)))
+
+get : Name → (Entry → a) → ETC a
+get n f = do
+  just m ← lookup-mapping n <$> get-mappings
+    where nothing → typeError [ "Name not found: " , nameErr n ]
+  pure (f m)
+
+insert : Name → Converted Name → Status → ETC ⊤
+insert n cn s = update-mappings (insert-mapping n cn s)
+
+set-status : Name → Status → ETC ⊤
+set-status n s ms = pure (tt , update-status n (λ _ → s) ms)
 
 get-name : Name → ETC (Converted Name)
 get-name n =
-  try get-existing-name
-  catch create-name
-  where
-    get-existing-name = do
-      mappings ← get-mappings
-      MaybeToETC [] (lookup-mapping mappings n)
-    create-name = do
-      let new-name-str = primStringAppend "Cat." (primShowQName n)
+  try
+    get n cname
+  catch do
+    let new-name-str = primStringAppend "Cat." (primShowQName n)
 
-      n′ ← conv <$> liftTC (freshName new-name-str)
+    n′ ← conv <$> liftTC (freshName new-name-str)
 
-      insert-mapping n n′ <$> get-mappings
-      pure n′
+    insert n n′ unconverted <$> get-mappings
+    pure n′
+
+_==ₛ_ : Status → Status → Bool
+unconverted ==ₛ unconverted = true
+converting ==ₛ converting = true
+converted ==ₛ converted = true
+_ ==ₛ _ = false
+
+_when_is_ : ETC a → Name → Status → ETC ⊤
+etc when n is s = do
+  s′ ← get n status
+  if s ==ₛ s′ then (etc >> pure tt) else (pure tt)
+
+infix 0 _when_is_
 
 id-term : Converted Term
 id-term = conv (def (quote id) [])
@@ -181,20 +235,21 @@ solve _ (_ ∷ _ ∷ _) = STUB "solve: more than one equation"
 
 {-# TERMINATING #-}
 get-or-mk-def n = do
-  n′ ← get-name n
-  dfn ← liftTC (getDefinition (fromConv n′))
-  mk-dfn n′ dfn
-  pure (conv (def (fromConv n′) []))
+  cn@(conv n′) ← get-name n
+  mk-dfn cn when n is unconverted
+
+  pure (conv (def n′ []))
 
   where
-    mk-dfn : Converted Name → Definition → ETC ⊤
-    mk-dfn n′ (function []) = do
+    mk-dfn : Converted Name → ETC ⊤
+    mk-dfn cn = do
       function cs ← liftTC (getDefinition n)
         where _ → typeError
-                    [ "Not a function" , nameErr n , nameErr (fromConv n′) ]
+                    [ "Not a function" , nameErr n , nameErr (fromConv cn) ]
+      set-status n converting
       cs′ ← convert-clauses n cs
-      solve n′ cs′
-    mk-dfn _ _ = pure tt
+      solve cn cs′
+      set-status n converted
 
 mk-defs [] = pure tt
 mk-defs (n ∷ ns) = do
@@ -290,8 +345,8 @@ stop = cons tt nil
 step-stop : Going ⇒ Gone
 unquoteDef step-stop =
   catify
-  ((quote Input.step-stop , conv step-stop)
-  ∷ (quote Input.step , conv (quote step))
-  ∷ (quote Input.stop , conv (quote stop))
+  ((quote Input.step-stop , mk-entry step-stop unconverted)
+  ∷ (quote Input.step , mk-entry (quote step) converted)
+  ∷ (quote Input.stop , mk-entry (quote stop) converted)
   ∷ []
   )
